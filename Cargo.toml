@@ -1,0 +1,37 @@
+[package]
+name = "rust-node-cache"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Ultra-fast in-memory cache for Node.js powered by Rust"
+repository = "https://github.com/robertolima-dev/rust-node-cache"
+
+[lib]
+# cdylib => gera uma biblioteca dinâmica (.node) que o Node consegue carregar.
+crate-type = ["cdylib"]
+
+[dependencies]
+# napi: runtime de bindings N-API (a ponte entre Rust e o motor V8/Node).
+# A feature `serde-json` ensina o napi a converter `serde_json::Value`
+# diretamente de/para valores JavaScript (objetos, arrays, números, etc.).
+napi = { version = "2", default-features = false, features = ["napi4", "serde-json"] }
+# napi-derive: macros (#[napi]) que geram o código de "cola" automaticamente.
+napi-derive = "2"
+# dashmap: HashMap concorrente com sharding interno. Permite leituras/escritas
+# de múltiplas threads sem um Mutex global — base do nosso cache thread-safe.
+dashmap = "6"
+# serde + serde_json: serialização. Guardamos os valores como JSON em Vec<u8>.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# thiserror: define o enum de erros do cache de forma ergonômica.
+thiserror = "2"
+
+[build-dependencies]
+# napi-build: roda no build.rs e configura flags de linkagem do N-API.
+napi-build = "2"
+
+[profile.release]
+# Binário menor e mais rápido para distribuição.
+lto = true
+strip = "symbols"
+opt-level = 3
