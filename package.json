@@ -1,6 +1,6 @@
 {
   "name": "rust-node-cache",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Ultra-fast in-memory cache for Node.js powered by Rust.",
   "keywords": [
     "cache",
@@ -23,7 +23,7 @@
     "type": "git",
     "url": "https://github.com/robertolima-dev/rust-node-cache.git"
   },
-  "homepage": "https://github.com/robertolima-dev/rust-node-cache",
+  "homepage": "https://rust-node-cache.vercel.app",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",

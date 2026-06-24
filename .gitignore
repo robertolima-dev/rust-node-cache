@@ -13,3 +13,6 @@ binding.d.ts
 # Misc
 .DS_Store
 *.log
+
+# Claude Code local files
+.claude/
