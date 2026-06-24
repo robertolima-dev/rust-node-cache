@@ -18,7 +18,9 @@ pub struct CacheEntry {
     pub value: Vec<u8>,
     /// Instante de expiração em ms (Unix). `None` => nunca expira por tempo.
     pub expires_at: Option<u64>,
-    /// Instante de criação em ms (Unix). Útil para futuras políticas (LRU/LFU).
+    /// Instante de criação em ms (Unix). Reservado para futuras políticas de
+    /// evicção (LRU/LFU); ainda não é lido no MVP.
+    #[allow(dead_code)]
     pub created_at: u64,
     /// Quantas vezes esta entrada específica foi lida com sucesso.
     pub hits: u64,
