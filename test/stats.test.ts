@@ -12,6 +12,7 @@ describe("Estatísticas", () => {
       sets: 0,
       deletes: 0,
       expired: 0,
+      evicted: 0,
       size: 0,
     });
   });

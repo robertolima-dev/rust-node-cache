@@ -23,6 +23,8 @@ pub struct CacheStats {
     pub deletes: AtomicU64,
     /// Total de entradas removidas por expiração (preguiçosa ou na varredura).
     pub expired: AtomicU64,
+    /// Total de entradas removidas por evicção (política LRU ao atingir `maxSize`).
+    pub evicted: AtomicU64,
 }
 
 impl CacheStats {
@@ -46,6 +48,10 @@ impl CacheStats {
     pub fn add_expired(&self, n: u64) {
         self.expired.fetch_add(n, Ordering::Relaxed);
     }
+
+    pub fn incr_evicted(&self) {
+        self.evicted.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Leitura imutável e consistente o suficiente dos contadores, mais o tamanho
@@ -56,5 +62,6 @@ pub struct StatsSnapshot {
     pub sets: u64,
     pub deletes: u64,
     pub expired: u64,
+    pub evicted: u64,
     pub size: u64,
 }

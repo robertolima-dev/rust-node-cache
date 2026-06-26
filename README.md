@@ -24,8 +24,10 @@ is **no compiler required at install time** on supported platforms.
 - 🦀 **Rust-powered** core for predictable, low-overhead performance
 - 🔒 **Thread-safe** via `DashMap` (lock-sharded concurrent map)
 - ⏱️ **TTL support** per entry (lazy expiration + active cleanup)
+- 🧹 **Background expiration** — optional sweeper thread (`cleanupIntervalSeconds`)
+- 🧠 **LRU eviction** — bound the cache by `maxSize` with `evictionPolicy: "lru"`
 - ⚡ **Fast reads** and **fast writes**
-- 📊 Built-in **statistics** (hits, misses, sets, deletes, expired, size)
+- 📊 Built-in **statistics** (hits, misses, sets, deletes, expired, evicted, size)
 - 🧩 **TypeScript** support with generics out of the box
 - 🌐 **Framework agnostic** — works with Express, Fastify, NestJS, Hono,
   Next.js, or plain Node.js
@@ -142,6 +144,35 @@ an active sweep:
 const removed = cache.cleanupExpired(); // number of entries removed
 ```
 
+Or let the cache sweep for you in the background — set `cleanupIntervalSeconds`
+and a thread reclaims expired entries on its own (no manual `cleanupExpired()`):
+
+```ts
+const cache = new Cache({ cleanupIntervalSeconds: 30 });
+```
+
+The thread is tied to the cache's lifetime: it stops automatically when the cache
+is garbage-collected.
+
+---
+
+## Eviction (maxSize)
+
+Cap the number of keys with `maxSize`. When the cache is full and a **new** key
+is written, `evictionPolicy` decides what happens:
+
+```ts
+// Default: reject the write (set returns false), keep existing entries.
+const a = new Cache({ maxSize: 1000 }); // evictionPolicy: "reject"
+
+// LRU: evict the least-recently-used entry to make room, then insert.
+const b = new Cache({ maxSize: 1000, evictionPolicy: "lru" });
+b.evictionPolicy; // "lru"
+```
+
+LRU recency is tracked per entry (updated on every `get` hit) and the evicted
+count is surfaced in `stats().evicted`. Overwriting an existing key never evicts.
+
 ---
 
 ## Statistics
@@ -159,6 +190,7 @@ Returns:
   sets: 800,
   deletes: 20,
   expired: 15,
+  evicted: 40,
   size: 780
 }
 ```
@@ -208,8 +240,9 @@ Bincode) later without touching the cache logic.
 
 | Method                         | Returns        | Description                                                       |
 | ------------------------------ | -------------- | ----------------------------------------------------------------- |
-| `new Cache(options?)`          | `Cache`        | Create a cache. `options.maxSize` caps the number of keys.        |
+| `new Cache(options?)`          | `Cache`        | Create a cache (`maxSize`, `evictionPolicy`, `cleanupIntervalSeconds`). |
 | `set(key, value, options?)`    | `boolean`      | Store/overwrite a value. `options.ttlSeconds` sets expiration.    |
+| `evictionPolicy` (getter)      | `string`       | The active policy: `"reject"` or `"lru"`.                         |
 | `get<T>(key)`                  | `T \| null`    | Read a value (lazy-expires stale entries).                        |
 | `delete(key)`                  | `boolean`      | Remove a key. `true` if it existed.                               |
 | `exists(key)`                  | `boolean`      | Whether the key exists and is valid.                              |
@@ -223,6 +256,8 @@ Bincode) later without touching the cache logic.
 ```ts
 interface CacheOptions {
   maxSize?: number;
+  evictionPolicy?: "reject" | "lru"; // default "reject"
+  cleanupIntervalSeconds?: number; // enables the background sweeper
 }
 
 interface SetOptions {
@@ -235,6 +270,7 @@ interface CacheStats {
   sets: number;
   deletes: number;
   expired: number;
+  evicted: number;
   size: number;
 }
 ```
@@ -323,15 +359,14 @@ Coming soon.
 
 ## Roadmap
 
-| Version | Feature                  |
-| ------- | ------------------------ |
-| v0.1    | Basic cache              |
-| v0.2    | TTL cleanup thread       |
-| v0.3    | LRU cache                |
-| v0.4    | LFU cache                |
-| v0.5    | Redis synchronization    |
-| v0.6    | Prometheus metrics       |
-| v0.7    | ImmutableLog integration |
+| Version | Feature                  | Status |
+| ------- | ------------------------ | ------ |
+| v0.1    | Basic cache              | ✅     |
+| v0.2    | TTL cleanup thread + LRU eviction | ✅ |
+| v0.3    | LFU cache                | 🔜     |
+| v0.4    | Redis synchronization    | 🔜     |
+| v0.5    | Prometheus metrics       | 🔜     |
+| v0.6    | ImmutableLog integration | 🔜     |
 
 ### Future: ImmutableLog Integration
 

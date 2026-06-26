@@ -19,9 +19,13 @@ pub struct CacheEntry {
     /// Instante de expiração em ms (Unix). `None` => nunca expira por tempo.
     pub expires_at: Option<u64>,
     /// Instante de criação em ms (Unix). Reservado para futuras políticas de
-    /// evicção (LRU/LFU); ainda não é lido no MVP.
+    /// evicção (LFU); ainda não é lido.
     #[allow(dead_code)]
     pub created_at: u64,
+    /// Último acesso (criação ou `get` com hit) em ms (Unix). Base da evicção LRU:
+    /// a entrada com o menor `last_accessed_at` é a candidata a sair quando o
+    /// cache atinge `maxSize`.
+    pub last_accessed_at: u64,
     /// Quantas vezes esta entrada específica foi lida com sucesso.
     pub hits: u64,
 }
@@ -33,6 +37,7 @@ impl CacheEntry {
             value,
             expires_at,
             created_at,
+            last_accessed_at: created_at,
             hits: 0,
         }
     }

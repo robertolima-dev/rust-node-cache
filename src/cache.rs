@@ -21,32 +21,64 @@ use crate::ttl;
 use dashmap::DashMap;
 use serde_json::Value;
 
+/// O que fazer quando `max_size` é atingido e chega uma chave **nova**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvictionPolicy {
+    /// Rejeita a escrita (`set` devolve `false`). Comportamento padrão.
+    Reject,
+    /// Remove a entrada menos recentemente usada (LRU) para abrir espaço.
+    Lru,
+}
+
 /// Cache em memória, thread-safe, com TTL opcional por entrada.
 pub struct RustCache {
     /// Mapa concorrente chave -> entrada serializada.
     entries: DashMap<String, CacheEntry>,
-    /// Contadores de hits/misses/sets/deletes/expired.
+    /// Contadores de hits/misses/sets/deletes/expired/evicted.
     stats: CacheStats,
-    /// Limite opcional de número de chaves. Quando atingido, `set` de uma chave
-    /// **nova** é rejeitado (retorna `false`). Políticas de evicção (LRU/LFU)
-    /// estão no roadmap — por enquanto o limite é uma barreira simples.
+    /// Limite opcional de número de chaves.
     max_size: Option<usize>,
+    /// Política aplicada quando o cache enche e chega uma chave nova.
+    eviction_policy: EvictionPolicy,
 }
 
 impl RustCache {
     /// Cria um cache vazio. `max_size = None` => sem limite de chaves.
-    pub fn new(max_size: Option<usize>) -> Self {
+    pub fn new(max_size: Option<usize>, eviction_policy: EvictionPolicy) -> Self {
         Self {
             entries: DashMap::new(),
             stats: CacheStats::default(),
             max_size,
+            eviction_policy,
         }
+    }
+
+    /// Remove a entrada com o menor `last_accessed_at` (a "menos recentemente
+    /// usada"). Varre o mapa uma vez — O(n) só na evicção (caminho raro: ocorre
+    /// apenas quando o cache está cheio e chega chave nova). Conta em `evicted`.
+    fn evict_lru(&self) {
+        let oldest = self
+            .entries
+            .iter()
+            .min_by_key(|e| e.value().last_accessed_at)
+            .map(|e| e.key().clone());
+        if let Some(key) = oldest {
+            if self.entries.remove(&key).is_some() {
+                self.stats.incr_evicted();
+            }
+        }
+    }
+
+    /// A política de evicção configurada.
+    pub fn eviction_policy(&self) -> EvictionPolicy {
+        self.eviction_policy
     }
 
     /// Insere ou sobrescreve uma chave. `ttl_seconds` define a expiração.
     ///
-    /// Retorna `false` apenas quando há `max_size` definido, a chave é nova e o
-    /// cache está cheio. Sobrescrever uma chave existente sempre é permitido.
+    /// Sobrescrever uma chave existente sempre é permitido. Para uma chave
+    /// **nova** quando o cache está cheio (`max_size`): com `Reject` retorna
+    /// `false`; com `Lru` remove a entrada menos recentemente usada e prossegue.
     pub fn set(
         &self,
         key: String,
@@ -55,7 +87,10 @@ impl RustCache {
     ) -> Result<bool, CacheError> {
         if let Some(max) = self.max_size {
             if self.entries.len() >= max && !self.entries.contains_key(&key) {
-                return Ok(false);
+                match self.eviction_policy {
+                    EvictionPolicy::Reject => return Ok(false),
+                    EvictionPolicy::Lru => self.evict_lru(),
+                }
             }
         }
 
@@ -83,6 +118,7 @@ impl RustCache {
                 true
             } else {
                 entry.hits += 1;
+                entry.last_accessed_at = now;
                 let value = serializer::deserialize(&entry.value)?;
                 self.stats.incr_hits();
                 return Ok(Some(value));
@@ -163,7 +199,48 @@ impl RustCache {
             sets: self.stats.sets.load(Ordering::Relaxed),
             deletes: self.stats.deletes.load(Ordering::Relaxed),
             expired: self.stats.expired.load(Ordering::Relaxed),
+            evicted: self.stats.evicted.load(Ordering::Relaxed),
             size: self.entries.len() as u64,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reject_policy_blocks_new_keys_when_full() {
+        let c = RustCache::new(Some(2), EvictionPolicy::Reject);
+        assert!(c.set("a".into(), &json!(1), None).unwrap());
+        assert!(c.set("b".into(), &json!(2), None).unwrap());
+        // cheio + chave nova => rejeita, sem evicção
+        assert!(!c.set("c".into(), &json!(3), None).unwrap());
+        assert_eq!(c.size(), 2);
+        assert_eq!(c.stats().evicted, 0);
+        // sobrescrever chave existente é sempre permitido
+        assert!(c.set("a".into(), &json!(10), None).unwrap());
+    }
+
+    #[test]
+    fn lru_policy_evicts_to_make_room() {
+        let c = RustCache::new(Some(2), EvictionPolicy::Lru);
+        assert!(c.set("a".into(), &json!(1), None).unwrap());
+        assert!(c.set("b".into(), &json!(2), None).unwrap());
+        // cheio + chave nova => remove a LRU e insere; tamanho fica no teto
+        assert!(c.set("c".into(), &json!(3), None).unwrap());
+        assert_eq!(c.size(), 2);
+        assert_eq!(c.stats().evicted, 1);
+    }
+
+    #[test]
+    fn no_max_size_never_evicts() {
+        let c = RustCache::new(None, EvictionPolicy::Lru);
+        for i in 0..100 {
+            c.set(format!("k{i}"), &json!(i), None).unwrap();
+        }
+        assert_eq!(c.size(), 100);
+        assert_eq!(c.stats().evicted, 0);
     }
 }

@@ -17,14 +17,27 @@
 // (que é um módulo CJS gerado pelo napi-rs).
 import * as native from "../binding.js";
 
+/** Estratégia de evicção quando `maxSize` é atingido. */
+export type EvictionPolicy = "reject" | "lru";
+
 /** Opções do construtor do cache. */
 export interface CacheOptions {
   /**
-   * Limite máximo de chaves. Ao ser atingido, `set` de uma chave **nova**
-   * retorna `false` (sobrescrever chave existente continua permitido).
-   * Sem valor => cache ilimitado.
+   * Limite máximo de chaves. O que acontece ao atingir depende de
+   * `evictionPolicy`. Sem valor => cache ilimitado.
    */
   maxSize?: number;
+  /**
+   * Política ao atingir `maxSize` numa chave **nova**:
+   * - `"reject"` (padrão): `set` retorna `false` (sobrescrever continua ok);
+   * - `"lru"`: remove a entrada menos recentemente usada e prossegue.
+   */
+  evictionPolicy?: EvictionPolicy;
+  /**
+   * Se definido (> 0), liga uma thread que varre entradas expiradas a cada
+   * N segundos (expiração em background, além da preguiçosa por acesso).
+   */
+  cleanupIntervalSeconds?: number;
 }
 
 /** Opções por operação de escrita. */
@@ -45,6 +58,8 @@ export interface CacheStats {
   deletes: number;
   /** Total de entradas removidas por expiração. */
   expired: number;
+  /** Total de entradas removidas por evicção (política LRU ao atingir `maxSize`). */
+  evicted: number;
   /** Número de chaves armazenadas agora. */
   size: number;
 }
@@ -67,11 +82,23 @@ export class Cache {
   private readonly native: native.Cache;
 
   constructor(options: CacheOptions = {}) {
-    // Só repassamos o objeto de opções ao Rust quando há algo relevante.
-    this.native =
-      options.maxSize !== undefined
-        ? new native.Cache({ maxSize: options.maxSize })
-        : new native.Cache();
+    // Só repassamos um objeto de opções ao Rust quando há algo relevante.
+    const hasOptions =
+      options.maxSize !== undefined ||
+      options.evictionPolicy !== undefined ||
+      options.cleanupIntervalSeconds !== undefined;
+    this.native = hasOptions
+      ? new native.Cache({
+          maxSize: options.maxSize,
+          evictionPolicy: options.evictionPolicy,
+          cleanupIntervalSeconds: options.cleanupIntervalSeconds,
+        })
+      : new native.Cache();
+  }
+
+  /** A política de evicção ativa: `"reject"` ou `"lru"`. */
+  get evictionPolicy(): EvictionPolicy {
+    return this.native.evictionPolicy as EvictionPolicy;
   }
 
   /**

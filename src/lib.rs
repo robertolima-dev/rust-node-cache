@@ -19,17 +19,30 @@ mod entry;
 mod errors;
 mod serializer;
 mod stats;
+mod sweeper;
 mod ttl;
 
-use cache::RustCache;
+use std::sync::Arc;
+use std::time::Duration;
+
+use cache::{EvictionPolicy, RustCache};
 use napi_derive::napi;
 use serde_json::Value;
+use sweeper::Sweeper;
 
-/// Opções do construtor: `new Cache({ maxSize })`.
+/// Opções do construtor:
+/// `new Cache({ maxSize, evictionPolicy, cleanupIntervalSeconds })`.
 #[napi(object)]
 pub struct CacheOptions {
-    /// Limite opcional de chaves. Ao atingir, `set` de chave nova retorna `false`.
+    /// Limite opcional de chaves. Comportamento ao atingir depende de
+    /// `evictionPolicy`.
     pub max_size: Option<u32>,
+    /// `"reject"` (padrão) — `set` de chave nova retorna `false` quando cheio;
+    /// `"lru"` — remove a entrada menos recentemente usada e prossegue.
+    pub eviction_policy: Option<String>,
+    /// Se definido (> 0), liga uma thread que varre entradas expiradas a cada
+    /// N segundos (expiração em background, além da lazy).
+    pub cleanup_interval_seconds: Option<u32>,
 }
 
 /// Opções por escrita: `cache.set(key, value, { ttlSeconds })`.
@@ -47,6 +60,7 @@ pub struct CacheStatsObject {
     pub sets: i64,
     pub deletes: i64,
     pub expired: i64,
+    pub evicted: i64,
     pub size: i64,
 }
 
@@ -57,17 +71,56 @@ pub struct CacheStatsObject {
 /// concorrente por dentro, várias chamadas podem rodar em paralelo.
 #[napi]
 pub struct Cache {
-    inner: RustCache,
+    inner: Arc<RustCache>,
+    /// Thread de expiração em background (quando `cleanupIntervalSeconds` é dado).
+    /// Mantida viva junto com o `Cache`; encerrada no `Drop`. O `_` evita o aviso
+    /// de campo não lido — seu efeito é o ciclo de vida, não a leitura.
+    _sweeper: Option<Sweeper>,
 }
 
 #[napi]
 impl Cache {
-    /// `new Cache()` ou `new Cache({ maxSize })`.
+    /// `new Cache()` ou `new Cache({ maxSize, evictionPolicy, cleanupIntervalSeconds })`.
     #[napi(constructor)]
-    pub fn new(options: Option<CacheOptions>) -> Self {
-        let max_size = options.and_then(|o| o.max_size).map(|m| m as usize);
-        Cache {
-            inner: RustCache::new(max_size),
+    pub fn new(options: Option<CacheOptions>) -> napi::Result<Self> {
+        let options = options.unwrap_or(CacheOptions {
+            max_size: None,
+            eviction_policy: None,
+            cleanup_interval_seconds: None,
+        });
+
+        let max_size = options.max_size.map(|m| m as usize);
+        let eviction_policy = match options.eviction_policy.as_deref() {
+            None | Some("reject") => EvictionPolicy::Reject,
+            Some("lru") => EvictionPolicy::Lru,
+            Some(other) => {
+                return Err(napi::Error::from_reason(format!(
+                    "evictionPolicy must be \"reject\" or \"lru\", got {other:?}"
+                )));
+            }
+        };
+
+        let inner = Arc::new(RustCache::new(max_size, eviction_policy));
+
+        let sweeper = match options.cleanup_interval_seconds {
+            Some(secs) if secs > 0 => {
+                Some(Sweeper::start(&inner, Duration::from_secs(secs as u64)))
+            }
+            _ => None,
+        };
+
+        Ok(Cache {
+            inner,
+            _sweeper: sweeper,
+        })
+    }
+
+    /// A política de evicção ativa: `"reject"` ou `"lru"`.
+    #[napi(getter)]
+    pub fn eviction_policy(&self) -> String {
+        match self.inner.eviction_policy() {
+            EvictionPolicy::Reject => "reject".to_string(),
+            EvictionPolicy::Lru => "lru".to_string(),
         }
     }
 
@@ -130,6 +183,7 @@ impl Cache {
             sets: s.sets as i64,
             deletes: s.deletes as i64,
             expired: s.expired as i64,
+            evicted: s.evicted as i64,
             size: s.size as i64,
         }
     }
